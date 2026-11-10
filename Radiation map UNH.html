@@ -1,0 +1,852 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#14212e">
+<title>UNH Background Radiation Map</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=IBM+Plex+Mono:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+:root {
+  /* Layout: survey-meter chrome around a full-bleed map. Header bar, map, dock with legend and one primary action. */
+  --panel: #14212e;
+  --panel-2: #1e3042;
+  --line: #2f465c;
+  --text: #eef3f7;
+  --muted: #9fb2c3;
+  --accent: #f6c61c;      /* trefoil yellow */
+  --accent-ink: #1b1600;
+  --danger: #ff6b6b;
+  --gps: #2f95ff;
+  --font-display: 'Barlow Condensed', 'Arial Narrow', sans-serif;
+  --font-body: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, Menlo, Consolas, monospace;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; background: var(--panel); color: var(--text); font-family: var(--font-body); font-size: 15px; -webkit-text-size-adjust: 100%; }
+button, input { font: inherit; color: inherit; }
+button { cursor: pointer; -webkit-tap-highlight-color: transparent; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+[hidden] { display: none !important; }
+
+#app { position: fixed; inset: 0; display: flex; flex-direction: column; overflow: hidden; }
+
+/* Header */
+.bar { display: flex; align-items: center; gap: 10px; padding: calc(8px + env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) 8px max(12px, env(safe-area-inset-left)); background: var(--panel); border-bottom: 1px solid var(--line); }
+.bar svg.trefoil { width: 30px; height: 30px; flex: none; }
+.bar .titles { flex: 1; min-width: 0; }
+.bar h1 { margin: 0; font-family: var(--font-display); font-weight: 700; font-size: 21px; line-height: 1; letter-spacing: .02em; text-transform: uppercase; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bar .sub { margin: 3px 0 0; display: flex; gap: 8px; align-items: center; color: var(--muted); font-size: 12.5px; flex-wrap: wrap; }
+.pill { display: inline-block; padding: 1px 7px; border-radius: 99px; background: #5c0a14; color: #ffd9d9; border: 1px solid #b3202c; font-weight: 600; font-size: 11.5px; }
+.icon-btn { flex: none; width: 42px; height: 42px; border-radius: 10px; border: 1px solid var(--line); background: var(--panel-2); display: grid; place-items: center; }
+.icon-btn svg { width: 20px; height: 20px; }
+
+/* Map */
+.map-wrap { position: relative; flex: 1; min-height: 0; overflow: hidden; background: #dfe5ea; }
+#map { position: absolute; inset: 0; overflow: hidden; background: #dfe5ea; font-family: var(--font-body); }
+.leaflet-container .leaflet-control-attribution { font-size: 10px; }
+.sel-rect { filter: drop-shadow(0 0 1.5px rgba(0,0,0,.9)); }
+
+.fabs { position: absolute; right: 10px; bottom: 26px; z-index: 1000; display: flex; flex-direction: column; gap: 8px; }
+.fab { width: 46px; height: 46px; border-radius: 50%; border: 1px solid var(--line); background: var(--panel); display: grid; place-items: center; box-shadow: 0 2px 8px rgba(0,0,0,.35); }
+.fab svg { width: 22px; height: 22px; }
+.fab.on { background: var(--gps); border-color: #fff; }
+
+.gps-chip { position: absolute; top: 10px; right: 10px; z-index: 1000; padding: 5px 10px; border-radius: 99px; background: var(--panel); border: 1px solid var(--line); font-size: 12px; font-weight: 500; display: flex; align-items: center; gap: 6px; box-shadow: 0 2px 8px rgba(0,0,0,.3); }
+.gps-chip i { width: 8px; height: 8px; border-radius: 50%; background: #6b7c8c; }
+.gps-chip.good i { background: #37d67a; }
+.gps-chip.weak i { background: var(--accent); }
+.gps-chip.bad i { background: var(--danger); }
+
+.hint { position: absolute; left: 10px; right: 66px; bottom: 26px; z-index: 1000; max-width: 380px; padding: 11px 12px; border-radius: 12px; background: var(--panel); border: 1px solid var(--line); box-shadow: 0 4px 14px rgba(0,0,0,.35); font-size: 13.5px; line-height: 1.4; display: flex; gap: 10px; align-items: flex-start; }
+.hint p { margin: 0; flex: 1; }
+.hint b { color: var(--accent); font-weight: 600; }
+.hint button { border: 0; background: none; color: var(--muted); padding: 0 2px; font-size: 20px; line-height: 1; }
+
+/* Editor card (top of map so the phone keyboard never covers it) */
+.editor { position: absolute; top: 10px; left: 10px; right: 10px; z-index: 1100; max-width: 440px; margin: 0 auto; padding: 12px; border-radius: 14px; background: var(--panel); border: 1px solid var(--line); box-shadow: 0 8px 26px rgba(0,0,0,.45); }
+.editor .row { display: flex; gap: 10px; align-items: center; }
+.editor .head { justify-content: space-between; margin-bottom: 10px; }
+.editor .cell-id { font-family: var(--font-display); font-weight: 700; font-size: 20px; letter-spacing: .03em; text-transform: uppercase; line-height: 1; }
+.editor .cell-meta { color: var(--muted); font-size: 11.5px; margin-top: 3px; font-variant-numeric: tabular-nums; }
+.editor .close { border: 0; background: none; color: var(--muted); font-size: 26px; line-height: 1; padding: 0 4px; }
+.cpm-field { flex: 1; display: flex; align-items: center; gap: 8px; padding: 0 12px; height: 54px; border-radius: 10px; background: #0d1721; border: 1px solid var(--line); }
+.cpm-field:focus-within { border-color: var(--accent); }
+.cpm-field input { flex: 1; min-width: 0; width: 100%; border: 0; outline: 0; background: none; font-family: var(--font-mono); font-weight: 600; font-size: 26px; }
+.cpm-field span { color: var(--muted); font-family: var(--font-display); font-weight: 600; font-size: 18px; letter-spacing: .06em; }
+.swatch { flex: none; width: 54px; height: 54px; border-radius: 10px; border: 1px solid var(--line); background: #0d1721; display: grid; place-items: center; font-size: 22px; font-weight: 700; color: #fff; }
+.note { width: 100%; height: 44px; margin-top: 8px; padding: 0 12px; border-radius: 10px; border: 1px solid var(--line); background: #0d1721; font-size: 16px; }
+.note:focus { outline: 0; border-color: var(--accent); }
+.err { color: var(--danger); font-size: 12.5px; margin: 6px 2px 0; min-height: 0; }
+.actions { display: flex; gap: 8px; margin-top: 10px; }
+.btn { height: 46px; padding: 0 16px; border-radius: 10px; border: 1px solid var(--line); background: var(--panel-2); font-weight: 600; font-size: 15px; white-space: nowrap; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.btn.ghost-danger { color: var(--danger); }
+.btn.grow { flex: 1; }
+.btn:disabled { opacity: .5; }
+
+/* Dock */
+.dock { background: var(--panel); border-top: 1px solid var(--line); padding: 9px max(12px, env(safe-area-inset-right)) max(10px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left)); display: flex; flex-direction: column; gap: 9px; }
+.legend { max-width: 560px; width: 100%; margin: 0 auto; }
+.legend .ramp { height: 12px; border-radius: 6px; border: 1px solid rgba(255,255,255,.18);
+  background: linear-gradient(90deg, rgb(32,96,214) 0%, rgb(44,166,84) 18%, rgb(245,214,34) 36%, rgb(240,138,28) 54%, rgb(217,35,35) 72%, rgb(110,4,18) 90%, rgb(12,4,6) 100%); }
+.legend .ticks { position: relative; height: 16px; margin-top: 3px; font-family: var(--font-mono); font-size: 11px; font-variant-numeric: tabular-nums; color: var(--text); }
+.legend .ticks span { position: absolute; top: 0; transform: translateX(-50%); white-space: nowrap; }
+.legend .ticks span:first-child { transform: none; }
+.legend .ticks span.alert { color: #ff9a9a; font-weight: 600; }
+.legend .cap { margin-top: 2px; font-size: 11.5px; color: var(--muted); }
+.dock .btn.primary { max-width: 560px; width: 100%; margin: 0 auto; height: 50px; font-size: 16px; display: flex; align-items: center; justify-content: center; gap: 8px; }
+.dock .btn.primary svg { width: 18px; height: 18px; }
+
+/* Menu sheet */
+.backdrop { position: absolute; inset: 0; z-index: 1200; background: rgba(5,10,15,.55); }
+.sheet { position: absolute; left: 0; right: 0; bottom: 0; z-index: 1300; max-height: 86%; overflow-y: auto; -webkit-overflow-scrolling: touch; background: var(--panel); border-top: 1px solid var(--line); border-radius: 16px 16px 0 0; padding: 14px max(16px, env(safe-area-inset-right)) calc(20px + env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left)); }
+.sheet .inner { max-width: 560px; margin: 0 auto; display: flex; flex-direction: column; gap: 18px; }
+.sheet h2 { margin: 0 0 8px; font-family: var(--font-display); font-weight: 700; font-size: 17px; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); }
+.sheet .sheet-head { display: flex; justify-content: space-between; align-items: center; }
+.sheet .sheet-head h2 { margin: 0; color: var(--text); font-size: 21px; letter-spacing: .03em; }
+.sheet p { margin: 0 0 8px; color: var(--muted); font-size: 13.5px; line-height: 1.45; }
+.sheet p:last-child { margin-bottom: 0; }
+.stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.stat { padding: 9px 10px; border-radius: 10px; background: var(--panel-2); border: 1px solid var(--line); }
+.stat b { display: block; font-family: var(--font-mono); font-weight: 600; font-size: 19px; font-variant-numeric: tabular-nums; }
+.stat span { font-size: 11.5px; color: var(--muted); }
+.stat.flag b { color: #ff9a9a; }
+.seg { display: flex; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.seg button { flex: 1; height: 42px; border: 0; background: var(--panel-2); font-weight: 600; }
+.seg button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
+.manual { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 10px; }
+.manual label { font-size: 11.5px; color: var(--muted); display: flex; flex-direction: column; gap: 4px; }
+.manual input { height: 44px; border-radius: 10px; border: 1px solid var(--line); background: #0d1721; padding: 0 10px; font-family: var(--font-mono); font-size: 16px; width: 100%; }
+.btn-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.btn-row .btn { flex: 1 1 150px; }
+.sheet .mt { margin-top: 10px; }
+
+.toast { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); z-index: 1400; max-width: min(92%, 420px); padding: 10px 14px; border-radius: 10px; background: #0b131b; border: 1px solid var(--line); font-size: 13.5px; line-height: 1.35; text-align: center; box-shadow: 0 6px 20px rgba(0,0,0,.45); }
+.toast.warn { border-color: #b3202c; background: #3a0a10; }
+
+.fatal { position: absolute; inset: 0; z-index: 2000; display: grid; place-items: center; padding: 24px; background: var(--panel); text-align: center; line-height: 1.5; }
+.fatal div { max-width: 340px; }
+@media (prefers-reduced-motion: no-preference) {
+  .sheet, .editor { animation: rise .16s ease-out; }
+  @keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+}
+</style>
+</head>
+<body>
+<div id="app">
+  <header class="bar">
+    <svg class="trefoil" viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="12" cy="12" r="11.5" fill="#f6c61c"/>
+      <circle cx="12" cy="12" r="5.6" fill="none" stroke="#1b1600" stroke-width="5.4" stroke-dasharray="5.864 5.864" transform="rotate(-60 12 12)"/>
+      <circle cx="12" cy="12" r="1.7" fill="#1b1600"/>
+    </svg>
+    <div class="titles">
+      <h1>UNH Radiation Map</h1>
+      <p class="sub"><span id="summary">No readings yet</span><span id="flagPill" class="pill" hidden></span></p>
+    </div>
+    <button class="icon-btn" id="menuBtn" type="button" aria-label="Open menu: stats, color scale, backup">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+    </button>
+  </header>
+
+  <div class="map-wrap">
+    <div id="map"></div>
+
+    <div class="gps-chip" id="gpsChip"><i></i><span id="gpsText">GPS off</span></div>
+
+    <div class="fabs">
+      <button class="fab" id="layerBtn" type="button" aria-label="Switch between street map and satellite">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M12 3l9 5-9 5-9-5 9-5z"/><path d="M3 13l9 5 9-5"/></svg>
+      </button>
+      <button class="fab" id="locBtn" type="button" aria-label="Show and follow my location">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="6.5"/><circle cx="12" cy="12" r="2" fill="currentColor"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>
+      </button>
+    </div>
+
+    <div class="hint" id="hint" hidden>
+      <p><b>Tap any square</b> to enter its CPM. Or walk the campus and press <b>Log reading here</b> to fill in the square you are standing in.</p>
+      <button type="button" id="hintClose" aria-label="Dismiss tip">&times;</button>
+    </div>
+
+    <form class="editor" id="editor" hidden autocomplete="off" novalidate>
+      <div class="row head">
+        <div>
+          <div class="cell-id" id="edId">Square</div>
+          <div class="cell-meta" id="edMeta"></div>
+        </div>
+        <button class="close" type="button" id="edClose" aria-label="Close without saving">&times;</button>
+      </div>
+      <div class="row">
+        <label class="cpm-field" for="edCpm">
+          <input id="edCpm" name="cpm" type="text" inputmode="decimal" enterkeyhint="done" placeholder="0" aria-label="Counts per minute">
+          <span>CPM</span>
+        </label>
+        <div class="swatch" id="edSwatch" aria-hidden="true"></div>
+      </div>
+      <input class="note" id="edNote" name="note" type="text" maxlength="140" enterkeyhint="done" placeholder="Note (optional): indoors, granite steps…" aria-label="Note">
+      <div class="err" id="edErr" role="alert"></div>
+      <div class="actions">
+        <button class="btn ghost-danger" type="button" id="edClear" hidden>Clear square</button>
+        <button class="btn primary grow" type="submit" id="edSave">Save reading</button>
+      </div>
+    </form>
+
+    <div class="toast" id="toast" hidden role="status"></div>
+  </div>
+
+  <footer class="dock">
+    <div class="legend" aria-label="Color scale in counts per minute">
+      <div class="ramp"></div>
+      <div class="ticks" id="ticks"></div>
+      <div class="cap" id="legendCap">The color scale sets itself from your readings.</div>
+    </div>
+    <button class="btn primary" id="logBtn" type="button">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="12" cy="12" r="6.5"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>
+      Log reading here
+    </button>
+  </footer>
+
+  <div class="backdrop" id="backdrop" hidden></div>
+  <section class="sheet" id="menu" hidden aria-label="Menu">
+    <div class="inner">
+      <div class="sheet-head">
+        <h2>Survey</h2>
+        <button class="icon-btn" type="button" id="menuClose" aria-label="Close menu">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+      </div>
+
+      <div>
+        <h2>Readings</h2>
+        <div class="stats">
+          <div class="stat"><b id="stN">0</b><span>squares logged</span></div>
+          <div class="stat"><b id="stMean">–</b><span>mean cpm</span></div>
+          <div class="stat"><b id="stMed">–</b><span>median cpm</span></div>
+          <div class="stat"><b id="stMin">–</b><span>lowest</span></div>
+          <div class="stat"><b id="stMax">–</b><span>highest</span></div>
+          <div class="stat flag"><b id="stFlag">0</b><span>flagged</span></div>
+        </div>
+        <div class="btn-row mt">
+          <button class="btn" type="button" id="showMax" disabled>Go to highest square</button>
+        </div>
+      </div>
+
+      <div>
+        <h2>Color scale</h2>
+        <div class="seg" role="group" aria-label="Color scale mode">
+          <button type="button" id="modeAuto" aria-pressed="true">Auto</button>
+          <button type="button" id="modeManual" aria-pressed="false">Manual</button>
+        </div>
+        <div class="manual" id="manualBox" hidden>
+          <label for="mLo">Green at<input id="mLo" type="text" inputmode="decimal"></label>
+          <label for="mHi">Red at<input id="mHi" type="text" inputmode="decimal"></label>
+          <label for="mAlert">Flag above<input id="mAlert" type="text" inputmode="decimal"></label>
+        </div>
+        <p class="mt" id="scaleNote"></p>
+      </div>
+
+      <div>
+        <h2>Backup</h2>
+        <p>Readings save automatically in this browser on this device. Export a copy now and then so a cleared browser or a lost phone does not take your survey with it.</p>
+        <div class="btn-row">
+          <button class="btn" type="button" id="expCsv">Export spreadsheet (CSV)</button>
+          <button class="btn" type="button" id="expJson">Export backup file</button>
+          <button class="btn" type="button" id="impBtn">Import backup file</button>
+        </div>
+        <input type="file" id="impFile" accept=".json,application/json" hidden>
+        <div class="btn-row mt">
+          <button class="btn ghost-danger" type="button" id="eraseBtn">Erase all readings</button>
+        </div>
+      </div>
+
+      <div>
+        <h2>How it works</h2>
+        <p>Each square is 10 m on a side (about 33 ft), roughly a medium classroom. The grid is fixed to the ground, so a square always covers the same spot.</p>
+        <p>Phone GPS is usually good to 5–10 m outdoors and much worse indoors or beside tall buildings. When the chip in the corner turns yellow or red, check the blue dashed square against the map before you save.</p>
+        <p>Location needs this page to be open from an https:// address and location permission allowed for the site.</p>
+      </div>
+    </div>
+  </section>
+
+  <div class="fatal" id="fatal" hidden><div><b>The map could not load.</b><br>This page needs an internet connection to fetch the map. Check your connection and reload. Your saved readings are not affected.</div></div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+/*PURE-START*/
+'use strict';
+// ---------- Grid: 10 m squares fixed to the ground, anchored SW of Durham ----------
+var CELL_M = 10, REF_LAT = 43.135, LAT0 = 43.10, LNG0 = -70.98;
+var _rad = function (d) { return d * Math.PI / 180; };
+var M_LAT = 111132.92 - 559.82 * Math.cos(2 * _rad(REF_LAT)) + 1.175 * Math.cos(4 * _rad(REF_LAT));
+var M_LNG = 111412.84 * Math.cos(_rad(REF_LAT)) - 93.5 * Math.cos(3 * _rad(REF_LAT));
+var DLAT = CELL_M / M_LAT, DLNG = CELL_M / M_LNG;
+
+function cellOf(lat, lng) { return { c: Math.floor((lng - LNG0) / DLNG), r: Math.floor((lat - LAT0) / DLAT) }; }
+function keyOf(c, r) { return c + ',' + r; }
+function boundsOf(c, r) { return [[LAT0 + r * DLAT, LNG0 + c * DLNG], [LAT0 + (r + 1) * DLAT, LNG0 + (c + 1) * DLNG]]; }
+function centerOf(c, r) { return [LAT0 + (r + 0.5) * DLAT, LNG0 + (c + 0.5) * DLNG]; }
+function labelOf(c, r) { return (c >= 0 ? 'E' + c : 'W' + (-c)) + ' · ' + (r >= 0 ? 'N' + r : 'S' + (-r)); }
+
+// ---------- Scale ----------
+function quantile(sorted, p) {
+  var i = (sorted.length - 1) * p, f = Math.floor(i), c = Math.ceil(i);
+  return sorted[f] + (sorted[c] - sorted[f]) * (i - f);
+}
+// Auto: green = lowest reading, red = highest normal reading.
+// Flag line = double the median, or the median plus 4x counting noise (sqrt of counts) if that is higher.
+function computeScale(values, cfg) {
+  var n = values.length;
+  var s = values.slice().sort(function (a, b) { return a - b; });
+  var med = n ? quantile(s, 0.5) : null;
+  if (cfg && cfg.mode === 'manual') {
+    var mlo = Math.max(0, Number(cfg.lo) || 0);
+    var mhi = Math.max(mlo + 1e-6, Number(cfg.hi) || 0);
+    var mal = Math.max(mhi, Number(cfg.alert) || 0);
+    return { lo: mlo, hi: mhi, alert: mal, mode: 'manual', median: med, n: n };
+  }
+  if (!n) return null;
+  var noise = Math.sqrt(Math.max(med, 1));
+  var alert = Math.max(2 * med, med + 4 * noise);
+  var normal = s.filter(function (v) { return v <= alert; });
+  var lo = normal[0], hi = normal[normal.length - 1];
+  var minSpan = 2 * noise;   // never stretch pure counting noise across the whole ramp
+  if (hi - lo < minSpan) {
+    var mid = (lo + hi) / 2;
+    lo = Math.max(0, mid - minSpan / 2);
+    hi = lo + minSpan;
+  }
+  if (hi > alert) hi = alert;
+  return { lo: lo, hi: hi, alert: alert, mode: 'auto', median: med, n: n };
+}
+var RAMP = [[32, 96, 214], [44, 166, 84], [245, 214, 34], [240, 138, 28], [217, 35, 35], [110, 4, 18], [12, 4, 6]];
+function buildStops(sc) {
+  var step = (sc.hi - sc.lo) / 3;
+  var xs = [0, sc.lo, sc.lo + step, sc.lo + 2 * step, sc.hi, sc.alert, sc.alert * 2];
+  for (var i = 1; i < xs.length; i++) if (xs[i] <= xs[i - 1]) xs[i] = xs[i - 1] + 1e-6;
+  return xs;
+}
+function colorFor(v, xs) {
+  if (!(v > xs[0])) return RAMP[0];
+  for (var i = 1; i < xs.length; i++) {
+    if (v <= xs[i]) {
+      var t = (v - xs[i - 1]) / (xs[i] - xs[i - 1]), a = RAMP[i - 1], b = RAMP[i];
+      return [Math.round(a[0] + (b[0] - a[0]) * t), Math.round(a[1] + (b[1] - a[1]) * t), Math.round(a[2] + (b[2] - a[2]) * t)];
+    }
+  }
+  return RAMP[RAMP.length - 1];
+}
+function fmt(v) {
+  if (v == null || !isFinite(v)) return '–';
+  if (Math.abs(v) >= 100) return String(Math.round(v));
+  return String(Math.round(v * 10) / 10);
+}
+function parseCpm(text) {
+  var t = String(text == null ? '' : text).trim().replace(',', '.');
+  if (t === '') return { error: 'Enter the CPM your counter shows.' };
+  if (!/^\d*\.?\d+$|^\d+\.$/.test(t)) return { error: 'Use digits only, for example 24 or 24.5.' };
+  var v = parseFloat(t);
+  if (!isFinite(v) || v < 0) return { error: 'CPM cannot be negative.' };
+  if (v > 10000000) return { error: 'That value is too large to be a CPM reading.' };
+  return { value: v };
+}
+function csvEscape(s) { s = String(s == null ? '' : s); return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; }
+/*PURE-END*/
+
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  if (!window.L) { $('fatal').hidden = false; return; }
+
+  // ---------- State ----------
+  var KEY = 'unh-cpm-map:v1';
+  var cells = new Map();               // "c,r" -> {c, r, cpm, note, t}
+  var settings = { scale: { mode: 'auto', lo: 15, hi: 45, alert: 90 }, base: 'street', view: null, hintSeen: false };
+  var scale = null, stops = null;
+  var storageOk = true;
+
+  function load() {
+    var raw = null;
+    try { raw = localStorage.getItem(KEY); } catch (e) { storageOk = false; }
+    if (!raw) return;
+    try {
+      var d = JSON.parse(raw);
+      addCells(d.cells);
+      if (d.scale && typeof d.scale === 'object') {
+        settings.scale.mode = d.scale.mode === 'manual' ? 'manual' : 'auto';
+        ['lo', 'hi', 'alert'].forEach(function (k) { if (isFinite(d.scale[k])) settings.scale[k] = Number(d.scale[k]); });
+      }
+      if (d.base === 'sat') settings.base = 'sat';
+      if (d.view && isFinite(d.view.lat) && isFinite(d.view.lng) && isFinite(d.view.z)) settings.view = d.view;
+      settings.hintSeen = !!d.hintSeen;
+    } catch (e) { /* unreadable save: start clean, leave the stored text alone until the next save */ }
+  }
+  function addCells(obj) {
+    var n = 0;
+    if (!obj || typeof obj !== 'object') return 0;
+    Object.keys(obj).forEach(function (k) {
+      var m = /^(-?\d+),(-?\d+)$/.exec(k), v = obj[k];
+      if (!m || !v) return;
+      var cpm = Number(v.cpm);
+      if (!isFinite(cpm) || cpm < 0) return;
+      cells.set(k, { c: parseInt(m[1], 10), r: parseInt(m[2], 10), cpm: cpm, note: typeof v.note === 'string' ? v.note.slice(0, 140) : '', t: isFinite(v.t) ? Number(v.t) : Date.now() });
+      n++;
+    });
+    return n;
+  }
+  function snapshot() {
+    var out = { v: 1, cellM: CELL_M, anchor: [LAT0, LNG0], cells: {}, scale: settings.scale, base: settings.base, view: settings.view, hintSeen: settings.hintSeen };
+    cells.forEach(function (c, k) { out.cells[k] = { cpm: c.cpm, note: c.note || '', t: c.t }; });
+    return out;
+  }
+  function persist(quiet) {
+    try { localStorage.setItem(KEY, JSON.stringify(snapshot())); storageOk = true; return true; }
+    catch (e) {
+      storageOk = false;
+      if (!quiet) toast('This browser would not save the reading. Use Export backup file in the menu so nothing is lost.', true);
+      return false;
+    }
+  }
+  function values() { var a = []; cells.forEach(function (c) { a.push(c.cpm); }); return a; }
+  function isFlagged(v) { return !!scale && v > scale.alert; }
+
+  load();
+
+  // ---------- Map ----------
+  var map = L.map('map', { zoomControl: false, doubleClickZoom: false, minZoom: 11, maxZoom: 21, zoomSnap: 1 });
+  var street = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxNativeZoom: 19, maxZoom: 21, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors' });
+  var sat = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxNativeZoom: 19, maxZoom: 21, attribution: 'Imagery &copy; Esri, Maxar, Earthstar Geographics' });
+  (settings.base === 'sat' ? sat : street).addTo(map);
+  L.control.zoom({ position: 'topleft' }).addTo(map);
+  L.control.scale({ position: 'bottomleft', imperial: true, metric: true }).addTo(map);
+  if (settings.view) map.setView([settings.view.lat, settings.view.lng], settings.view.z);
+  else map.setView([43.1356, -70.9340], 17);   // Thompson Hall lawn
+
+  var EDIT_ZOOM = 18;
+
+  var GridLayer = L.GridLayer.extend({
+    createTile: function (coords) {
+      var tile = L.DomUtil.create('canvas', 'leaflet-tile');
+      var size = this.getTileSize();
+      var dpr = Math.min(window.devicePixelRatio || 1, 2);
+      tile.width = size.x * dpr; tile.height = size.y * dpr;
+      var ctx = tile.getContext('2d');
+      ctx.scale(dpr, dpr);
+      try { drawTile(ctx, coords, size); } catch (e) { /* leave the tile blank rather than break the map */ }
+      return tile;
+    }
+  });
+  var grid = new GridLayer({ zIndex: 5, updateWhenZooming: false, minZoom: 11, maxZoom: 21 }).addTo(map);
+
+  function drawTile(ctx, coords, size) {
+    var z = coords.z;
+    var ox = coords.x * size.x, oy = coords.y * size.y;
+    var nw = map.unproject([ox, oy], z), se = map.unproject([ox + size.x, oy + size.y], z);
+    var c0 = Math.floor((nw.lng - LNG0) / DLNG), c1 = Math.floor((se.lng - LNG0) / DLNG);
+    var r0 = Math.floor((se.lat - LAT0) / DLAT), r1 = Math.floor((nw.lat - LAT0) / DLAT);
+    var X = function (c) { return map.project([nw.lat, LNG0 + c * DLNG], z).x - ox; };
+    var Y = function (r) { return map.project([LAT0 + r * DLAT, nw.lng], z).y - oy; };
+    var cellPx = X(c0 + 1) - X(c0);
+    var onSat = settings.base === 'sat';
+
+    // filled squares
+    if (stops) {
+      cells.forEach(function (cell) {
+        if (cell.c < c0 || cell.c > c1 || cell.r < r0 || cell.r > r1) return;
+        var x0 = X(cell.c), x1 = X(cell.c + 1), y0 = Y(cell.r + 1), y1 = Y(cell.r);
+        var w = x1 - x0, h = y1 - y0;
+        if (w < 3) { x0 -= (3 - w) / 2; w = 3; }
+        if (h < 3) { y0 -= (3 - h) / 2; h = 3; }
+        var rgb = colorFor(cell.cpm, stops), flagged = isFlagged(cell.cpm);
+        ctx.fillStyle = 'rgba(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ',' + (flagged ? 0.93 : 0.74) + ')';
+        ctx.fillRect(x0, y0, w, h);
+        if (flagged && w >= 6) {
+          // flagged squares get a double outline so they stand out by shape, not only by color
+          ctx.lineWidth = 2; ctx.strokeStyle = '#000'; ctx.strokeRect(x0 + 1, y0 + 1, w - 2, h - 2);
+          ctx.lineWidth = 1; ctx.strokeStyle = '#fff'; ctx.strokeRect(x0 + 2.5, y0 + 2.5, w - 5, h - 5);
+        }
+        if (cellPx >= 30) {
+          var lum = 0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2];
+          var fs = Math.max(10, Math.min(16, cellPx * 0.3));
+          ctx.font = '600 ' + fs + 'px "IBM Plex Mono", ui-monospace, Menlo, monospace';
+          ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+          ctx.fillStyle = lum > 150 ? '#10161c' : '#ffffff';
+          ctx.fillText(fmt(cell.cpm) + (flagged ? '!' : ''), x0 + w / 2, y0 + h / 2 + 0.5);
+        }
+      });
+    }
+
+    // grid lines, once squares are big enough to see
+    if (cellPx >= 7) {
+      var a = cellPx >= 14 ? 0.30 : 0.16;
+      ctx.strokeStyle = onSat ? 'rgba(255,255,255,' + (a + 0.12) + ')' : 'rgba(18,32,46,' + a + ')';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      for (var c = c0; c <= c1 + 1; c++) { var x = Math.round(X(c)) + 0.5; ctx.moveTo(x, 0); ctx.lineTo(x, size.y); }
+      for (var r = r0; r <= r1 + 1; r++) { var y = Math.round(Y(r)) + 0.5; ctx.moveTo(0, y); ctx.lineTo(size.x, y); }
+      ctx.stroke();
+    }
+  }
+
+  // ---------- Scale, legend, summary ----------
+  function refresh() {
+    var vals = values();
+    scale = computeScale(vals, settings.scale);
+    stops = scale ? buildStops(scale) : null;
+    grid.redraw();
+    renderLegend();
+    renderSummary(vals);
+    renderMenu(vals);
+  }
+  var TICK_POS = [0, 18, 36, 54, 72, 90];
+  function renderLegend() {
+    var el = $('ticks'); el.textContent = '';
+    var cap = $('legendCap');
+    if (!scale) {
+      cap.textContent = 'Counts per minute. The color scale sets itself from your readings.';
+      ['0', 'low', '', '', 'high', 'flag'].forEach(function (t, i) { if (t) el.appendChild(tick(t, TICK_POS[i], i === 5)); });
+      return;
+    }
+    for (var i = 0; i < 6; i++) el.appendChild(tick(fmt(stops[i]), TICK_POS[i], i === 5));
+    cap.textContent = scale.mode === 'manual'
+      ? 'Counts per minute, manual scale. Squares above ' + fmt(scale.alert) + ' are flagged.'
+      : 'Counts per minute, scaled to your ' + scale.n + (scale.n === 1 ? ' reading' : ' readings') + '. Above ' + fmt(scale.alert) + ' is flagged.';
+  }
+  function tick(text, pos, alert) {
+    var s = document.createElement('span');
+    s.textContent = text; s.style.left = pos + '%';
+    if (alert) s.className = 'alert';
+    return s;
+  }
+  function stats(vals) {
+    if (!vals.length) return null;
+    var s = vals.slice().sort(function (a, b) { return a - b; }), sum = 0;
+    s.forEach(function (v) { sum += v; });
+    var flagged = 0; s.forEach(function (v) { if (isFlagged(v)) flagged++; });
+    return { n: s.length, mean: sum / s.length, median: quantile(s, 0.5), min: s[0], max: s[s.length - 1], flagged: flagged };
+  }
+  function renderSummary(vals) {
+    var st = stats(vals), pill = $('flagPill');
+    if (!st) { $('summary').textContent = 'No readings yet'; pill.hidden = true; return; }
+    $('summary').textContent = st.n + (st.n === 1 ? ' square' : ' squares') + ' · median ' + fmt(st.median) + ' cpm';
+    pill.hidden = !st.flagged;
+    pill.textContent = st.flagged + ' flagged';
+  }
+  function renderMenu(vals) {
+    var st = stats(vals);
+    $('stN').textContent = st ? st.n : '0';
+    $('stMean').textContent = st ? fmt(st.mean) : '–';
+    $('stMed').textContent = st ? fmt(st.median) : '–';
+    $('stMin').textContent = st ? fmt(st.min) : '–';
+    $('stMax').textContent = st ? fmt(st.max) : '–';
+    $('stFlag').textContent = st ? st.flagged : '0';
+    $('showMax').disabled = !st;
+    var manual = settings.scale.mode === 'manual';
+    $('modeAuto').setAttribute('aria-pressed', String(!manual));
+    $('modeManual').setAttribute('aria-pressed', String(manual));
+    $('manualBox').hidden = !manual;
+    $('scaleNote').textContent = manual
+      ? 'Fixed scale: blue at 0, green, yellow, orange, then red at your chosen values. Anything above the flag value turns dark red, fading to black at double that.'
+      : 'Blue is 0. Green is your lowest reading and red is your highest normal one, so the colors stretch to fit your map as it grows. A square is flagged dark red to black when it reads more than double your median' + (scale ? ' (currently above ' + fmt(scale.alert) + ' cpm).' : '.');
+  }
+
+  // ---------- Toast ----------
+  var toastTimer = null;
+  function toast(msg, warn) {
+    var t = $('toast');
+    t.textContent = msg; t.className = 'toast' + (warn ? ' warn' : ''); t.hidden = false;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { t.hidden = true; }, warn ? 6500 : 3200);
+  }
+
+  // ---------- Editor ----------
+  var selKey = null, selCell = null;
+  var selRect = L.rectangle(boundsOf(0, 0), { color: '#ffffff', weight: 3, fill: false, interactive: false, className: 'sel-rect' });
+
+  function openEditor(c, r, opts) {
+    opts = opts || {};
+    selKey = keyOf(c, r); selCell = { c: c, r: r };
+    var existing = cells.get(selKey), ctr = centerOf(c, r);
+    selRect.setBounds(boundsOf(c, r)); if (!map.hasLayer(selRect)) selRect.addTo(map);
+    $('edId').textContent = 'Square ' + labelOf(c, r);
+    $('edMeta').textContent = ctr[0].toFixed(5) + ', ' + ctr[1].toFixed(5) + (existing ? ' · saved ' + when(existing.t) : ' · empty');
+    $('edCpm').value = existing ? String(existing.cpm) : '';
+    $('edNote').value = existing ? existing.note || '' : '';
+    $('edErr').textContent = '';
+    $('edClear').hidden = !existing;
+    $('edSave').textContent = existing ? 'Update reading' : 'Save reading';
+    $('editor').hidden = false;
+    dismissHint();
+    paintSwatch();
+    try { $('edCpm').focus({ preventScroll: true }); $('edCpm').select(); } catch (e) {}
+    // keep the chosen square visible just below the card
+    requestAnimationFrame(function () {
+      var wrap = $('map').getBoundingClientRect(), card = $('editor').getBoundingClientRect();
+      var p = map.latLngToContainerPoint(ctr);
+      var targetY = Math.min(wrap.height - 40, (card.bottom - wrap.top) + 70);
+      var target = L.point(wrap.width / 2, targetY);
+      if (opts.recenter || p.y < (card.bottom - wrap.top) + 20 || p.y > wrap.height - 20 || p.x < 20 || p.x > wrap.width - 20) {
+        map.panBy(p.subtract(target), { animate: true, duration: 0.25 });
+      }
+    });
+  }
+  function closeEditor() {
+    $('editor').hidden = true; selKey = null; selCell = null;
+    if (map.hasLayer(selRect)) map.removeLayer(selRect);
+    try { document.activeElement && document.activeElement.blur(); } catch (e) {}
+  }
+  function when(t) {
+    try { return new Date(t).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }); }
+    catch (e) { return new Date(t).toISOString().slice(0, 16).replace('T', ' '); }
+  }
+  function paintSwatch() {
+    var sw = $('edSwatch'), p = parseCpm($('edCpm').value);
+    if (p.error || !selKey) { sw.style.background = '#0d1721'; sw.textContent = ''; return; }
+    var vals = [];
+    cells.forEach(function (c, k) { if (k !== selKey) vals.push(c.cpm); });
+    vals.push(p.value);
+    var sc = computeScale(vals, settings.scale), rgb = colorFor(p.value, buildStops(sc));
+    sw.style.background = 'rgb(' + rgb.join(',') + ')';
+    sw.textContent = p.value > sc.alert ? '!' : '';
+  }
+  $('edCpm').addEventListener('input', function () { $('edErr').textContent = ''; paintSwatch(); });
+  $('edClose').addEventListener('click', closeEditor);
+  $('editor').addEventListener('submit', function (e) {
+    e.preventDefault();
+    if (!selKey) return;
+    var p = parseCpm($('edCpm').value);
+    if (p.error) { $('edErr').textContent = p.error; $('edCpm').focus(); return; }
+    cells.set(selKey, { c: selCell.c, r: selCell.r, cpm: p.value, note: $('edNote').value.trim().slice(0, 140), t: Date.now() });
+    var saved = persist();
+    refresh();
+    var flagged = isFlagged(p.value), v = p.value;
+    closeEditor();
+    if (saved) {
+      if (flagged) toast(fmt(v) + ' cpm saved. That is well above the rest of your map. Worth a second, longer count.', true);
+      else toast(fmt(v) + ' cpm saved');
+    }
+    askPersist();
+  });
+  $('edClear').addEventListener('click', function () {
+    if (!selKey) return;
+    cells.delete(selKey);
+    persist(); refresh(); closeEditor();
+    toast('Square cleared');
+  });
+  var askedPersist = false;
+  function askPersist() {
+    if (askedPersist) return; askedPersist = true;
+    try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(function () {}); } catch (e) {}
+  }
+
+  map.on('click', function (e) {
+    if (map.getZoom() < EDIT_ZOOM) {
+      map.setView(e.latlng, 19);
+      toast('Zoomed in. Tap a square to enter its reading.');
+      return;
+    }
+    var cl = cellOf(e.latlng.lat, e.latlng.lng);
+    openEditor(cl.c, cl.r);
+  });
+  var viewTimer = null;
+  map.on('moveend', function () {
+    var c = map.getCenter();
+    settings.view = { lat: +c.lat.toFixed(6), lng: +c.lng.toFixed(6), z: map.getZoom() };
+    clearTimeout(viewTimer); viewTimer = setTimeout(function () { persist(true); }, 600);
+  });
+
+  // ---------- Base layer ----------
+  $('layerBtn').addEventListener('click', function () {
+    if (settings.base === 'sat') { map.removeLayer(sat); street.addTo(map); settings.base = 'street'; }
+    else { map.removeLayer(street); sat.addTo(map); settings.base = 'sat'; }
+    grid.bringToFront(); grid.redraw(); persist(true);
+  });
+
+  // ---------- GPS ----------
+  var watchId = null, lastFix = null, follow = false, pendingLog = false, firstFix = true;
+  var meAcc = L.circle([0, 0], { radius: 1, color: '#2f95ff', weight: 1, fillColor: '#2f95ff', fillOpacity: 0.12, interactive: false });
+  var meCell = L.rectangle(boundsOf(0, 0), { color: '#1877e6', weight: 2.5, dashArray: '6 5', fill: false, interactive: false });
+  var meDot = L.circleMarker([0, 0], { radius: 7, color: '#ffffff', weight: 2.5, fillColor: '#1877e6', fillOpacity: 1, interactive: false });
+
+  function setChip(cls, text) { $('gpsChip').className = 'gps-chip' + (cls ? ' ' + cls : ''); $('gpsText').textContent = text; }
+  function setFollow(on) { follow = on; $('locBtn').classList.toggle('on', on); }
+
+  function startGps() {
+    if (watchId !== null) return true;
+    if (!('geolocation' in navigator)) { toast('This browser does not offer location. You can still tap squares by hand.', true); setChip('bad', 'No GPS'); return false; }
+    if (window.isSecureContext === false) { toast('Location only works when this page is opened from an https:// address. You can still tap squares by hand.', true); setChip('bad', 'GPS needs https'); return false; }
+    setChip('', 'Finding you…');
+    watchId = navigator.geolocation.watchPosition(onFix, onGpsError, { enableHighAccuracy: true, maximumAge: 2000, timeout: 30000 });
+    return true;
+  }
+  function onFix(pos) {
+    var lat = pos.coords.latitude, lng = pos.coords.longitude, acc = pos.coords.accuracy || 0;
+    lastFix = { lat: lat, lng: lng, acc: acc, t: Date.now() };
+    var cl = cellOf(lat, lng);
+    meAcc.setLatLng([lat, lng]).setRadius(Math.max(acc, 1));
+    meCell.setBounds(boundsOf(cl.c, cl.r));
+    meDot.setLatLng([lat, lng]);
+    if (!map.hasLayer(meDot)) { meAcc.addTo(map); meCell.addTo(map); meDot.addTo(map); }
+    var a = Math.round(acc);
+    if (acc <= 10) setChip('good', 'GPS ±' + a + ' m');
+    else if (acc <= 25) setChip('weak', 'GPS ±' + a + ' m, check square');
+    else setChip('bad', 'GPS ±' + a + ' m, too loose');
+    if (pendingLog) { pendingLog = false; firstFix = false; $('toast').hidden = true; logHere(); return; }
+    if (follow) {
+      if (firstFix || map.getZoom() < EDIT_ZOOM) map.setView([lat, lng], Math.max(map.getZoom(), 19));
+      else if ($('editor').hidden) map.panTo([lat, lng], { animate: true, duration: 0.4 });
+    }
+    firstFix = false;
+  }
+  function onGpsError(err) {
+    pendingLog = false;
+    if (err && err.code === 1) {
+      stopGps(); setChip('bad', 'Location blocked');
+      toast('Location is blocked for this page. Allow it in your browser\'s site settings, then tap the locate button again.', true);
+    } else if (!lastFix) {
+      setChip('weak', 'No fix yet');
+      toast('Still looking for a GPS fix. It works best outdoors with a clear view of the sky.');
+    }
+  }
+  function stopGps() {
+    if (watchId !== null) { try { navigator.geolocation.clearWatch(watchId); } catch (e) {} watchId = null; }
+    setFollow(false);
+  }
+  $('locBtn').addEventListener('click', function () {
+    if (follow) { setFollow(false); toast('Stopped following. The blue dot stays on the map.'); return; }
+    if (!startGps()) return;
+    setFollow(true);
+    if (lastFix) map.setView([lastFix.lat, lastFix.lng], Math.max(map.getZoom(), 19));
+  });
+  map.on('dragstart', function () { if (follow) setFollow(false); });
+
+  function logHere() {
+    // A live watch keeps lastFix current (it only reports when you move), so trust it while it is running.
+    if (!lastFix || watchId === null) {
+      if (!startGps()) return;
+      pendingLog = true;
+      toast('Finding your location…');
+      return;
+    }
+    var cl = cellOf(lastFix.lat, lastFix.lng);
+    if (map.getZoom() < EDIT_ZOOM) map.setView([lastFix.lat, lastFix.lng], 19, { animate: false });
+    openEditor(cl.c, cl.r, { recenter: true });
+    if (lastFix.acc > 25) toast('GPS is only good to ±' + Math.round(lastFix.acc) + ' m right now, wider than two squares. Check the highlighted square against the map before saving.', true);
+  }
+  $('logBtn').addEventListener('click', logHere);
+
+  // ---------- Menu ----------
+  function openMenu() { $('toast').hidden = true; $('backdrop').hidden = false; $('menu').hidden = false; $('menu').scrollTop = 0; fillManual(); }
+  function closeMenu() { $('backdrop').hidden = true; $('menu').hidden = true; disarmErase(); }
+  $('menuBtn').addEventListener('click', openMenu);
+  $('menuClose').addEventListener('click', closeMenu);
+  $('backdrop').addEventListener('click', closeMenu);
+  document.addEventListener('keydown', function (e) {
+    if (e.key !== 'Escape') return;
+    if (!$('menu').hidden) closeMenu(); else if (!$('editor').hidden) closeEditor();
+  });
+
+  function fillManual() {
+    $('mLo').value = fmt(settings.scale.lo); $('mHi').value = fmt(settings.scale.hi); $('mAlert').value = fmt(settings.scale.alert);
+  }
+  $('modeAuto').addEventListener('click', function () { settings.scale.mode = 'auto'; persist(true); refresh(); });
+  $('modeManual').addEventListener('click', function () {
+    if (settings.scale.mode !== 'manual' && scale) {   // start from what the auto scale currently shows
+      settings.scale.lo = Math.round(scale.lo); settings.scale.hi = Math.max(Math.round(scale.hi), Math.round(scale.lo) + 1); settings.scale.alert = Math.max(Math.round(scale.alert), settings.scale.hi);
+    }
+    settings.scale.mode = 'manual'; fillManual(); persist(true); refresh();
+  });
+  ['mLo', 'mHi', 'mAlert'].forEach(function (id) {
+    $(id).addEventListener('change', function () {
+      var lo = parseCpm($('mLo').value), hi = parseCpm($('mHi').value), al = parseCpm($('mAlert').value);
+      if (lo.error || hi.error || al.error) { toast('Scale values need to be plain numbers.', true); fillManual(); return; }
+      if (!(lo.value < hi.value && hi.value <= al.value)) { toast('Keep the order: green below red, and red at or below the flag value.', true); fillManual(); return; }
+      settings.scale.lo = lo.value; settings.scale.hi = hi.value; settings.scale.alert = al.value;
+      persist(true); refresh();
+    });
+  });
+
+  $('showMax').addEventListener('click', function () {
+    var best = null;
+    cells.forEach(function (c) { if (!best || c.cpm > best.cpm) best = c; });
+    if (!best) return;
+    closeMenu();
+    map.setView(centerOf(best.c, best.r), Math.max(map.getZoom(), 19), { animate: false });
+    openEditor(best.c, best.r, { recenter: true });
+  });
+
+  // ---------- Export / import ----------
+  function stamp() { var d = new Date(), p = function (n) { return (n < 10 ? '0' : '') + n; }; return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()); }
+  function download(name, text, type) {
+    try {
+      var url = URL.createObjectURL(new Blob([text], { type: type }));
+      var a = document.createElement('a'); a.href = url; a.download = name;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(function () { URL.revokeObjectURL(url); }, 4000);
+      toast('Saved ' + name + ' to your downloads');
+    } catch (e) { toast('This browser blocked the download.', true); }
+  }
+  $('expCsv').addEventListener('click', function () {
+    if (!cells.size) { toast('There are no readings to export yet.'); return; }
+    var rows = [['square', 'col_east', 'row_north', 'lat_center', 'lng_center', 'cpm', 'flagged', 'note', 'updated']];
+    Array.from(cells.values()).sort(function (a, b) { return a.t - b.t; }).forEach(function (c) {
+      var ctr = centerOf(c.c, c.r);
+      rows.push([labelOf(c.c, c.r).replace(' · ', ' '), c.c, c.r, ctr[0].toFixed(6), ctr[1].toFixed(6), c.cpm, isFlagged(c.cpm) ? 'yes' : '', c.note || '', new Date(c.t).toISOString()]);
+    });
+    download('unh-radiation-' + stamp() + '.csv', rows.map(function (r) { return r.map(csvEscape).join(','); }).join('\r\n') + '\r\n', 'text/csv');
+  });
+  $('expJson').addEventListener('click', function () {
+    download('unh-radiation-backup-' + stamp() + '.json', JSON.stringify(snapshot(), null, 1), 'application/json');
+  });
+  $('impBtn').addEventListener('click', function () { $('impFile').click(); });
+  $('impFile').addEventListener('change', function () {
+    var f = this.files && this.files[0]; this.value = '';
+    if (!f) return;
+    var rd = new FileReader();
+    rd.onerror = function () { toast('That file could not be read.', true); };
+    rd.onload = function () {
+      try {
+        var d = JSON.parse(String(rd.result));
+        if (!d || typeof d.cells !== 'object') throw new Error('shape');
+        if (d.cellM && Number(d.cellM) !== CELL_M) { toast('That backup uses a different square size and cannot be merged.', true); return; }
+        var n = addCells(d.cells);
+        persist(); refresh();
+        toast(n ? 'Imported ' + n + (n === 1 ? ' square' : ' squares') + '. Squares in the file replaced matching ones here.' : 'That backup had no readings in it.');
+      } catch (e) { toast('That is not a backup file from this map. Choose the .json file you exported.', true); }
+    };
+    rd.readAsText(f);
+  });
+
+  var eraseArmed = false, eraseTimer = null;
+  function disarmErase() { eraseArmed = false; clearTimeout(eraseTimer); $('eraseBtn').textContent = 'Erase all readings'; }
+  $('eraseBtn').addEventListener('click', function () {
+    if (!cells.size) { toast('There is nothing to erase.'); return; }
+    if (!eraseArmed) {
+      eraseArmed = true; $('eraseBtn').textContent = 'Tap again to erase ' + cells.size + (cells.size === 1 ? ' square' : ' squares');
+      eraseTimer = setTimeout(disarmErase, 5000); return;
+    }
+    disarmErase(); cells.clear(); persist(); refresh(); closeEditor(); closeMenu();
+    toast('All readings erased');
+  });
+
+  // ---------- First run ----------
+  function dismissHint() {
+    if ($('hint').hidden) return;
+    $('hint').hidden = true;
+    if (!settings.hintSeen) { settings.hintSeen = true; persist(true); }
+  }
+  $('hintClose').addEventListener('click', dismissHint);
+  if (!cells.size && !settings.hintSeen) $('hint').hidden = false;
+
+  refresh();
+  if (!storageOk) toast('This browser is not allowing saved data (private mode?). Readings will be lost when the page closes unless you export a backup.', true);
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(function () { grid.redraw(); });
+  window.addEventListener('pagehide', function () { persist(true); });
+})();
+</script>
+</body>
+</html>
